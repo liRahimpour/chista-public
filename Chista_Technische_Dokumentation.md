@@ -253,16 +253,165 @@ React-Single-Page-Application mit dem **Graph Explorer** als zentraler Ansicht:
 
 ## 10. Technische Umsetzung der KI-Schicht (Plan)
 
-Der Kontext für das LLM soll nicht einfach durch das Zerschneiden ganzer Dateien entstehen, sondern gezielt aus dem bereits vorhandenen Wissensgraphen zusammengestellt werden. Wir nutzen dafür keine fertige RAG-Bibliothek, sondern bauen die Logik selbst, um volle Kontrolle über Genauigkeit und Nachvollziehbarkeit zu behalten.
+Die KI-Schicht wird so aufgebaut, dass **Chista die zentrale Steuerung übernimmt**. Das Sprachmodell greift weder direkt auf Datenbanken noch auf externe Systeme zu. Chista entscheidet, welche Informationen benötigt werden, ruft die passenden internen oder externen Werkzeuge auf und stellt daraus den Kontext für das Modell zusammen.
 
-Geplante Schritte:
+Die eigentliche Modell-Ausführung erfolgt über eine austauschbare lokale oder externe Modell-Laufzeit. Dafür kann beispielsweise **Ollama** verwendet werden. Welches konkrete Chat- oder Embedding-Modell eingesetzt wird, soll konfigurierbar bleiben und nicht fest mit der Architektur gekoppelt sein.
 
-1. **Chunking anhand vorhandener Symbolgrenzen**: Jedes `CodeSymbol` speichert bereits Start- und Endzeile einer Klasse oder Methode. Diese Grenzen nutzen wir direkt als Chunk-Grenzen, statt Text willkürlich nach Tokenanzahl zu zerschneiden. Die Struktur aus der Graph-Analyse wird damit für die KI-Schicht wiederverwendet, nicht neu erfunden.
-2. **Tokenisierung und Embedding**: Jeder Chunk wird über ein lokales Embedding-Modell in einen Vektor umgewandelt und in **Qdrant** gespeichert, zusammen mit einer Referenz auf das zugehörige Symbol.
-3. **Kontext in zwei Schritten**: Bei einer Anfrage holen wir nicht nur ähnliche Textstellen aus Qdrant, sondern zusätzlich die strukturell relevante Umgebung aus dem Neo4j-Graphen. Also z. B. wer eine Methode aufruft oder wovon sie abhängt.
-4. **Rückverfolgbarkeit**: Jede Information im Kontext bleibt über die Symbol-ID bis zur genauen Datei und Zeile nachvollziehbar.
+Für Chat, Analyse und Tool-Auswahl kann ein geeignetes Sprachmodell verwendet werden. Für Embeddings wird ein getrenntes Embedding-Modell eingesetzt. Dadurch bleiben die Aufgaben klar getrennt und die Modelle können später unabhängig voneinander ausgetauscht oder an unterschiedliche Einsatzszenarien angepasst werden.
 
-**Weitere Quellen**: Der Ansatz ist nicht auf Quellcode beschränkt. Perspektivisch sollen weitere Wissensquellen auf dieselbe Weise angebunden werden, etwa Dokumentation, Tickets, Wikis oder Commit-Historien. Sie würden nach demselben Muster verarbeitet: in sinnvolle Abschnitte zerlegt, eingebettet, in Qdrant abgelegt und mit den passenden Symbolen im Wissensgraphen verknüpft.
+Der Kontext für das LLM soll nicht einfach durch das Zerschneiden ganzer Dateien entstehen, sondern gezielt aus dem bereits vorhandenen Wissensgraphen und weiteren Wissensquellen zusammengestellt werden. Dafür wird zunächst keine fertige RAG-Bibliothek eingesetzt. Die Retrieval- und Orchestrierungslogik wird gezielt in Chista umgesetzt, um Kontrolle über Genauigkeit, Quellen und Nachvollziehbarkeit zu behalten.
+
+### Geplante Schritte
+
+#### 1. Chunking anhand vorhandener Symbolgrenzen
+
+Jedes `CodeSymbol` speichert bereits Start- und Endzeile einer Klasse oder Methode. Diese Grenzen werden direkt als Chunk-Grenzen verwendet, statt Quellcode willkürlich nach Zeichen- oder Tokenanzahl zu zerlegen.
+
+Die bereits vorhandene Code- und Graphanalyse wird damit für die KI-Schicht wiederverwendet und nicht erneut unabhängig modelliert.
+
+#### 2. Embeddings und Vektorsuche
+
+Die erzeugten Chunks werden über ein Embedding-Modell in Vektoren umgewandelt und in einer Vektordatenbank gespeichert, beispielsweise **Qdrant**.
+
+Jeder Eintrag enthält Referenzen auf das zugrunde liegende Symbol sowie auf Datei und Zeilenbereich.
+
+Der Importpfad ist dabei vom eigentlichen Chat getrennt:
+
+```text
+Quelle
+→ Chista
+→ Normalisierung / Chunking
+→ Embedding-Modell
+→ Vektordatenbank
+```
+
+#### 3. Kombiniertes Retrieval aus Vektorsuche und Wissensgraph
+
+Bei einer Benutzeranfrage wird der Kontext nicht nur semantisch über die Vektorsuche bestimmt. Chista kann zusätzlich die strukturell relevante Umgebung aus dem Wissensgraphen ermitteln, beispielsweise aus **Neo4j**.
+
+Beispiel:
+
+```text
+Vektorsuche:
+→ semantisch passende Methoden und Dokumente
+
+Wissensgraph:
+→ Aufrufer
+→ Abhängigkeiten
+→ verwendete Klassen
+→ betroffene Komponenten
+```
+
+Dadurch entsteht ein Kontext, der sowohl semantische Ähnlichkeit als auch tatsächliche Softwarebeziehungen berücksichtigt.
+
+#### 4. Chista als Orchestrator
+
+Chista sammelt die relevanten Informationen und stellt daraus den Kontext für das Sprachmodell zusammen.
+
+```text
+Benutzer
+→ Chista
+→ Vektorsuche / Wissensgraph / Tools
+→ Chista baut Kontext
+→ Modell-Laufzeit / Sprachmodell
+→ Antwort
+```
+
+Das Modell erhält damit nur die Informationen, die Chista ihm bereitstellt. Es spricht weder direkt mit dem Wissensgraphen noch mit der Vektordatenbank und besitzt keine direkten Zugangsdaten zu externen Systemen.
+
+#### 5. Tool-Aufrufe und MCP
+
+Für externe Systeme soll Chista perspektivisch **MCP-Clients** verwenden. Damit können beispielsweise GitHub, Jira, SharePoint oder weitere Systeme über entsprechende MCP-Server angebunden werden.
+
+Das Sprachmodell kann dabei einen benötigten Tool-Aufruf vorschlagen, führt ihn jedoch nicht selbst aus.
+
+```text
+Sprachmodell
+→ schlägt Tool-Aufruf vor
+→ Chista prüft und führt ihn aus
+→ MCP-Client
+→ MCP-Server
+→ externes System
+```
+
+Die Ergebnisse werden anschließend wieder von Chista mit den Informationen aus Wissensgraph und Vektorsuche zusammengeführt und dem Modell für die Antwort bereitgestellt.
+
+#### 6. Rückverfolgbarkeit und Quellen
+
+Jede Information im erzeugten Kontext soll auf ihre Herkunft zurückgeführt werden können.
+
+Für Quellcode geschieht dies über die Symbol-ID bis hin zu Datei und Zeilenbereich. Für externe Quellen werden entsprechende Referenzen wie Ticket-ID, Commit-ID oder Dokument-ID gespeichert.
+
+Dadurch sollen Antworten später nicht nur formuliert, sondern auch mit nachvollziehbaren Quellen belegt werden können.
+
+### Weitere Wissensquellen
+
+Der Ansatz ist ausdrücklich nicht auf Quellcode beschränkt. Weitere Quellen wie Dokumentationen, Tickets, Wikis, Commits oder Betriebsinformationen sollen nach demselben Grundprinzip eingebunden werden:
+
+```text
+Quelle
+→ Chista / Connector oder MCP
+→ Normalisierung
+→ sinnvolle Wissenseinheiten
+→ Embeddings
+→ Vektordatenbank
+→ Verknüpfung mit dem Wissensgraphen
+```
+
+Dabei ist wichtig, dass unterschiedliche Quellen nicht nur getrennt durchsucht werden. Sie sollen über gemeinsame Domänenobjekte und Beziehungen miteinander verbunden werden, beispielsweise:
+
+```text
+Ticket
+→ IMPLEMENTED_BY → Commit
+
+Commit
+→ CHANGED → File
+
+File
+→ CONTAINS → Symbol
+
+Incident
+→ AFFECTED → Component
+```
+
+So entsteht schrittweise eine gemeinsame Wissensbasis über Code, Historie, Dokumentation und weitere Systeminformationen.
+
+### Zielarchitektur
+
+Die zentrale Idee lautet:
+
+```text
+Chista
+= Orchestrierung und Kontrolle
+
+Sprachmodell
+= Chat, Analyse, Formulierung und Tool-Auswahl
+
+Embedding-Modell
+= Erzeugung semantischer Vektoren
+
+Wissensgraph
+= strukturelle Beziehungen
+  Beispiel: Neo4j
+
+Vektordatenbank
+= semantische Suche
+  Beispiel: Qdrant
+
+Modell-Laufzeit
+= Ausführung lokaler oder externer Modelle
+  Beispiel: Ollama
+
+MCP-Clients
+= kontrollierter Zugriff auf externe Systeme
+```
+
+Damit kann bereits ein kleiner MVP aufgebaut werden, ohne später die grundlegende Architektur wieder ersetzen zu müssen.
+
+Zunächst können nur Chat, eine Modell-Laufzeit und vorhandenes Graphwissen angebunden werden. Vektorsuche, Embeddings und MCP lassen sich anschließend schrittweise ergänzen.
+
+Die konkrete Auswahl der Modell-Laufzeit, Chat-Modelle, Embedding-Modelle oder Vektordatenbank bleibt dabei bewusst austauschbar und konfigurierbar.
+
 
 ---
 
