@@ -412,6 +412,7 @@ Zunächst können nur Chat, eine Modell-Laufzeit und vorhandenes Graphwissen ang
 
 Die konkrete Auswahl der Modell-Laufzeit, Chat-Modelle, Embedding-Modelle oder Vektordatenbank bleibt dabei bewusst austauschbar und konfigurierbar.
 
+![Zielarchitektur.png](Zielarchitektur.png)
 
 ---
 
